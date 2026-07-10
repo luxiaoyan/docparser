@@ -170,6 +170,13 @@
         gap: 10px;
       }
 
+      .viewer-tabs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        justify-content: flex-end;
+      }
+
       button {
         min-height: 40px;
         border: 1px solid transparent;
@@ -193,6 +200,20 @@
         border-color: var(--line);
         background: #fff;
         color: var(--text);
+      }
+
+      button.viewer-tab {
+        min-height: 34px;
+        border-color: var(--line);
+        background: #fff;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      button.viewer-tab.active {
+        border-color: var(--accent);
+        background: #ecfdf5;
+        color: var(--accent-strong);
       }
 
       button:disabled {
@@ -279,6 +300,10 @@
         .metric-row {
           grid-template-columns: 1fr;
           gap: 4px;
+        }
+
+        .viewer-tabs {
+          justify-content: flex-start;
         }
       }
     </style>
@@ -378,7 +403,21 @@
 
         <section aria-labelledby="raw-title">
           <div class="panel-head">
-            <h2 id="raw-title">响应</h2>
+            <h2 id="raw-title">解析结果</h2>
+            <div class="viewer-tabs" role="tablist" aria-label="解析结果视图">
+              <button class="viewer-tab active" type="button" data-view="merged" role="tab" aria-selected="true">
+                合并结果
+              </button>
+              <button class="viewer-tab" type="button" data-view="pymupdf" role="tab" aria-selected="false">
+                PyMuPDF 原始
+              </button>
+              <button class="viewer-tab" type="button" data-view="mineru" role="tab" aria-selected="false">
+                MinerU 原始
+              </button>
+              <button class="viewer-tab" type="button" data-view="response" role="tab" aria-selected="false">
+                当前响应
+              </button>
+            </div>
           </div>
           <pre id="raw-output">{}</pre>
         </section>
@@ -401,10 +440,14 @@
       const taskStatus = document.querySelector("#task-status");
       const schemaStatus = document.querySelector("#schema-status");
       const rawOutput = document.querySelector("#raw-output");
+      const viewButtons = [...document.querySelectorAll("[data-view]")];
       const health = document.querySelector("#health");
       const healthText = document.querySelector("#health-text");
       let currentDocumentId = "";
       let currentSchemaId = "contract_v1";
+      let currentParseResult = {};
+      let currentResponse = {};
+      let activeView = "merged";
 
       const fields = {
         documentId: document.querySelector("#document-id"),
@@ -418,8 +461,58 @@
         element.className = `status-line ${state}`.trim();
       }
 
+      function mergedParseResult(payload) {
+        if (!payload || !Object.keys(payload).length) {
+          return {};
+        }
+        const merged = { ...payload };
+        delete merged.engine_results;
+        return merged;
+      }
+
+      function payloadForView(view) {
+        if (view === "merged") {
+          return mergedParseResult(currentParseResult);
+        }
+        if (view === "pymupdf") {
+          return currentParseResult.engine_results?.pymupdf || {};
+        }
+        if (view === "mineru") {
+          return currentParseResult.engine_results?.mineru || {};
+        }
+        return currentResponse;
+      }
+
+      function renderViewer() {
+        rawOutput.textContent = JSON.stringify(payloadForView(activeView), null, 2);
+      }
+
+      function setActiveView(view) {
+        activeView = view;
+        for (const button of viewButtons) {
+          const selected = button.dataset.view === view;
+          button.classList.toggle("active", selected);
+          button.setAttribute("aria-selected", String(selected));
+        }
+        renderViewer();
+      }
+
+      function showResponse(payload, activate = true) {
+        currentResponse = payload;
+        if (activate) {
+          setActiveView("response");
+        } else {
+          renderViewer();
+        }
+      }
+
       function showRaw(payload) {
-        rawOutput.textContent = JSON.stringify(payload, null, 2);
+        showResponse(payload);
+      }
+
+      function showParseResult(payload) {
+        currentParseResult = payload;
+        setActiveView("merged");
       }
 
       function updateSummary(payload) {
@@ -515,7 +608,7 @@
         try {
           const response = await fetch(`/documents/${encodeURIComponent(documentId)}/parse-result`);
           const payload = await readJson(response);
-          showRaw(payload);
+          showParseResult(payload);
           setLine(taskStatus, "解析结果已加载", "success");
         } catch (error) {
           showRaw(error.payload || { error: error.message });
@@ -537,8 +630,10 @@
         uploadForm.reset();
         taskInput.value = "";
         currentDocumentId = "";
+        currentParseResult = {};
+        currentResponse = {};
         updateSummary({});
-        showRaw({});
+        setActiveView("merged");
         setLine(uploadStatus, "");
         setLine(taskStatus, "");
       });
@@ -628,6 +723,12 @@
           extractButton.disabled = false;
         }
       });
+
+      for (const button of viewButtons) {
+        button.addEventListener("click", () => {
+          setActiveView(button.dataset.view || "merged");
+        });
+      }
 
       checkHealth();
     </script>

@@ -70,7 +70,7 @@ class SchemaExtractorTests(unittest.TestCase):
                     "name": "contract_no",
                     "label": "合同编号",
                     "value": "HT-FORM-001",
-                    "source": "pypdf.acroform",
+                    "source": "pymupdf.widget",
                 }
             ],
         )

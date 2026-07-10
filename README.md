@@ -33,7 +33,34 @@ Open `http://127.0.0.1:8000/` to use the web console.
 
 The milestone-2 parser exposes a MinerU-compatible boundary. Set `DOCPARSER_MINERU_COMMAND` to a command that accepts `{input}` and returns parse JSON on stdout. When it is not configured, the service uses a PyMuPDF native-text fallback and includes a warning in the parse result.
 
-To run the local service with MinerU:
+For production-style deployments, run MinerU's API service and point the main service at its synchronous parse endpoint:
+
+```powershell
+uv pip install -U "mineru[all]"
+uv run mineru-api --host 127.0.0.1 --port 8001
+```
+
+Then start the main API with the full `mineru-api` endpoint:
+
+```powershell
+$env:DOCPARSER_MINERU_SERVICE_URL="http://127.0.0.1:8001/file_parse"
+uv run uvicorn docparser.app:app --host 127.0.0.1 --port 8000
+```
+
+`DOCPARSER_MINERU_SERVICE_URL` is the full HTTP request URL used by the main service. For `mineru-api`, use `/file_parse`; the main service sends a `multipart/form-data` POST with the PDF file field named `files`, plus MinerU return flags.
+
+For Docker Compose, configure the same value through the environment. If `mineru-api` runs as a Compose service named `mineru-service`, use the service DNS name:
+
+```powershell
+$env:DOCPARSER_MINERU_SERVICE_URL="http://mineru-service:8000/file_parse"
+docker compose up --build -d
+```
+
+If the main API runs in Docker but `mineru-api` runs on the host machine, use `http://host.docker.internal:8001/file_parse`.
+
+If `DOCPARSER_MINERU_SERVICE_URL` is configured, it takes precedence over the local command adapter.
+
+To run the local service with a local MinerU command instead:
 
 ```powershell
 uv pip install -U "mineru[all]"

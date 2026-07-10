@@ -11,8 +11,8 @@ The service does not prioritize high-fidelity page reconstruction or coordinate-
 - Accept PDF uploads and create parsing tasks.
 - Extract text, tables, images, native PDF form fields, attachments, metadata, and useful diagnostics.
 - Prefer native/document parsing and only use OCR when a PDF page has insufficient extractable text or requires visual recognition.
-- Use MinerU as the primary PDF content parsing engine.
-- Use PyMuPDF and pypdf as supplemental PDF structure parsers.
+- Use an independently deployed MinerU API service as the primary PDF content parsing engine.
+- Use PyMuPDF for PDF preflight, supplemental structure extraction, and local text fallback.
 - Normalize all parser outputs into a unified internal JSON model.
 - Support schema-based structured field extraction after generic parsing.
 - Provide field validation, normalization, source attribution, and confidence scoring.
@@ -34,10 +34,10 @@ The service does not prioritize high-fidelity page reconstruction or coordinate-
 flowchart TD
   A["Upload PDF"] --> B["API Service"]
   B --> C["File Validation"]
-  C --> D["Preflight: pypdf / PyMuPDF"]
-  D --> E["MinerU Main Parser"]
+  C --> D["Preflight: PyMuPDF"]
+  D --> E["MinerU Service API"]
   E --> F["MinerU Output: Markdown / JSON / Tables / Images"]
-  D --> G["Supplemental PDF Data"]
+  D --> G["PyMuPDF Supplemental PDF Data"]
   F --> H["Normalizer"]
   G --> H
   H --> I["Unified PDF JSON"]
@@ -50,7 +50,7 @@ flowchart TD
 The service uses a layered architecture:
 
 1. API and task layer: file upload, task creation, status query, result query, callback management.
-2. Parsing layer: MinerU primary content parsing plus PyMuPDF/pypdf supplemental extraction.
+2. Parsing layer: independent MinerU service for primary content parsing, with PyMuPDF for preflight, supplemental structure data, and text fallback.
 3. Normalization layer: converts all parser outputs into one stable internal document model.
 4. Extraction layer: schema-driven business field extraction.
 5. Validation layer: type checks, format normalization, confidence scoring, and warning generation.
@@ -86,7 +86,7 @@ Responsibilities:
 
 ### 5.3 Preflight Parser
 
-Recommended libraries: pypdf and PyMuPDF.
+Recommended library: PyMuPDF.
 
 Responsibilities:
 
@@ -101,10 +101,11 @@ Responsibilities:
 
 ### 5.4 MinerU Main Parser
 
-MinerU is the primary PDF content parser.
+MinerU is the primary PDF content parser. It should be deployed as an independent API service instead of sharing the main API runtime.
 
 Responsibilities:
 
+- Use `mineru-api` to provide the HTTP `/file_parse` endpoint, which accepts `multipart/form-data` with the PDF file field named `files`.
 - Extract text in reading order.
 - Produce Markdown and structured JSON outputs.
 - Extract tables and preserve table structure.
@@ -112,39 +113,33 @@ Responsibilities:
 - Handle scanned PDFs or garbled PDFs through OCR.
 - Handle complex layouts better than low-level PDF text extraction alone.
 
+The main API configures the full request URL through `DOCPARSER_MINERU_SERVICE_URL`, for example `http://mineru-service:8000/file_parse`. When this setting exists, it takes precedence over the local command adapter. If neither the service URL nor the local command is configured, the API uses PyMuPDF text fallback.
+
 MinerU output should not be treated as the final business result. It is the main source for normalized document content.
 
 ### 5.5 PyMuPDF Supplemental Parser
 
 Responsibilities:
 
+- Run PDF preflight: readability, encryption state, page count, page sizes, rotations, and metadata.
 - Extract embedded image assets when MinerU output is incomplete.
 - Render pages for OCR diagnostics, debugging, or fallback workflows.
-- Extract widget/form data where useful.
+- Extract widget/form data for native form-field strategies.
+- Extract basic embedded-attachment metadata.
 - Read annotations when enabled.
 - Provide page-level diagnostics such as text density and renderability.
 
-### 5.6 pypdf Supplemental Parser
+### 5.6 Normalizer
 
 Responsibilities:
 
-- Read AcroForm fields using PDF-level structures.
-- Extract text form fields where available.
-- Extract metadata and attachments.
-- Detect XFA presence.
-- Inspect outlines and low-level document structure when needed.
-
-### 5.7 Normalizer
-
-Responsibilities:
-
-- Merge MinerU, PyMuPDF, and pypdf outputs.
+- Merge MinerU and PyMuPDF outputs.
 - Deduplicate overlapping images, forms, and metadata.
 - Convert parser-specific data into a stable internal schema.
 - Preserve source attribution for every important content unit.
 - Attach warnings instead of silently dropping partial failures.
 
-### 5.8 Schema Extractor
+### 5.7 Schema Extractor
 
 Responsibilities:
 
@@ -158,7 +153,7 @@ Responsibilities:
   - optional LLM/model-assisted extraction behind an interface.
 - Return extracted values with source, confidence, and validation status.
 
-### 5.9 Validator
+### 5.8 Validator
 
 Responsibilities:
 
@@ -251,7 +246,7 @@ Coordinates may be stored internally if a parser provides them, but the public p
   "value": "HT-2026-001",
   "field_type": "text",
   "page_no": 1,
-  "source": "pypdf.acroform",
+  "source": "pymupdf.widget",
   "confidence": 1.0
 }
 ```
@@ -283,7 +278,7 @@ Native PDF form fields have higher trust than text-derived key-value pairs.
   "storage_key": "documents/doc_001/attachments/appendix.xlsx",
   "sha256": "cd34...",
   "size_bytes": 20480,
-  "source": "pypdf"
+  "source": "pymupdf"
 }
 ```
 
@@ -294,10 +289,10 @@ Native PDF form fields have higher trust than text-derived key-value pairs.
 | Text and reading order | MinerU | PyMuPDF fallback | Prefer MinerU. Use PyMuPDF only if MinerU fails or returns insufficient text. |
 | Tables | MinerU | Optional table fallback later | Prefer MinerU. Preserve HTML, Markdown, and cell matrix when available. |
 | Images | MinerU | PyMuPDF | Deduplicate by sha256. If both exist, keep MinerU caption/semantic data and PyMuPDF asset diagnostics. |
-| Native forms | pypdf | PyMuPDF | Prefer native PDF field values over text-derived key-value pairs. |
-| Metadata | pypdf | PyMuPDF | Merge keys, retain conflicts in diagnostics. |
-| Attachments | pypdf | PyMuPDF fallback | Deduplicate by filename and sha256. |
-| Annotations | PyMuPDF | pypdf | Keep as optional auxiliary content. |
+| Native forms | PyMuPDF | Text strategy fallback | Prefer native PDF field values over text-derived key-value pairs. |
+| Metadata | PyMuPDF | MinerU raw diagnostics | Use PyMuPDF preflight metadata as canonical and keep MinerU raw diagnostics for troubleshooting. |
+| Attachments | PyMuPDF | Optional attachment service later | Deduplicate by filename and sha256. |
+| Annotations | PyMuPDF | Optional enhancement later | Keep as optional auxiliary content. |
 
 ## 8. Schema Extraction
 
@@ -522,8 +517,8 @@ Logs should include document id, task id, parser versions, parse mode, and error
 Phase 1 should deliver:
 
 1. PDF upload and task creation.
-2. PDF preflight using pypdf/PyMuPDF.
-3. MinerU-based PDF parsing.
+2. PDF preflight using PyMuPDF.
+3. MinerU-service-based PDF parsing.
 4. Supplemental form, metadata, attachment, and image extraction.
 5. Unified parse JSON.
 6. Schema definition and schema-based extraction.
@@ -538,11 +533,13 @@ Phase 1 should deliver:
 - FastAPI upload and task APIs.
 - Local/object storage abstraction.
 - PDF validation and task state model.
-- Basic pypdf/PyMuPDF preflight.
+- Basic PyMuPDF preflight.
 
-### Milestone 2: MinerU Integration
+### Milestone 2: MinerU Service Integration
 
-- MinerU worker wrapper.
+- MinerU HTTP client wrapper.
+- `DOCPARSER_MINERU_SERVICE_URL` configuration.
+- Local command adapter as a development-compatible path.
 - Parse result collection.
 - Markdown/JSON/table/image ingestion.
 - Parser version and warning capture.
@@ -550,7 +547,7 @@ Phase 1 should deliver:
 ### Milestone 3: Normalized PDF Model
 
 - Unified parse result schema.
-- Merge rules for MinerU, PyMuPDF, and pypdf.
+- Merge rules for MinerU and PyMuPDF.
 - Image, form, attachment, metadata deduplication.
 
 ### Milestone 4: Schema Extraction
@@ -572,14 +569,14 @@ Use the following defaults for phase 1. They can be made configurable after real
 
 - File size limit: 100 MB per PDF.
 - Page count limit: 300 pages per PDF.
-- MinerU execution mode: isolated worker process invoked by the parsing worker. This avoids coupling the API process to model/runtime failures.
-- Acceleration target: CPU-compatible deployment first, with GPU-enabled workers supported by configuration when available.
+- MinerU execution mode: production deployments call `mineru-api`. The main API configures the full `/file_parse` request URL through `DOCPARSER_MINERU_SERVICE_URL`; local development may use the `DOCPARSER_MINERU_COMMAND` adapter; if neither is configured, the service uses PyMuPDF text fallback.
+- Acceleration target: keep the main API lightweight and CPU-friendly; configure CPU/GPU, memory, long timeouts, and parsing concurrency independently on the MinerU service.
 - Schema scope: project-scoped schemas. This keeps schema management flexible for future multi-tenant deployments without forcing tenant logic into phase 1.
 - Asset access: return extracted images and attachments through authenticated API endpoints. Signed object storage URLs can be added later if direct object access is required.
 - OCR policy: page-level fallback. Run OCR only on pages where native/MinerU text quality is insufficient or MinerU reports visual/OCR parsing.
 
 ## 18. Final Recommendation
 
-Use MinerU as the main PDF content parser and keep PyMuPDF/pypdf as supplemental PDF structure parsers. Do not expose parser-specific output directly as the business API. Instead, normalize all parser outputs into a stable internal PDF JSON model, then run schema-based business extraction on top.
+Use an independent MinerU API service as the main PDF content parser and PyMuPDF as the preflight, supplemental structure parser, and text fallback. Do not expose parser-specific output directly as the business API. Instead, normalize all parser outputs into a stable internal PDF JSON model, then run schema-based business extraction on top.
 
 This keeps phase 1 focused on PDF parsing while preserving a clean extension path for DOCX or other formats later.

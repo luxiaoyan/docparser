@@ -5,7 +5,8 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DOCPARSER_MINERU_COMMAND: ""
+      DOCPARSER_MINERU_SERVICE_URL: ${DOCPARSER_MINERU_SERVICE_URL:-}
+      DOCPARSER_MINERU_COMMAND: ${DOCPARSER_MINERU_COMMAND:-}
     volumes:
       - ./data:/app/data
     healthcheck:

@@ -8,3 +8,4 @@ class ParserSettings:
     max_pages: int = 300
     storage_root: Path = Path("data/documents")
     mineru_command: str | None = None
+    mineru_service_url: str | None = None

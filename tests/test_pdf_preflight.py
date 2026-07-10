@@ -2,17 +2,17 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pypdf import PdfWriter
+import fitz
 
 from docparser.config import ParserSettings
 from docparser.pdf_preflight import PdfPreflightService, PdfValidationError
 
 
 def write_one_page_pdf(path: Path) -> None:
-    writer = PdfWriter()
-    writer.add_blank_page(width=72, height=72)
-    with path.open("wb") as file:
-        writer.write(file)
+    document = fitz.open()
+    document.new_page(width=72, height=72)
+    document.save(path)
+    document.close()
 
 
 class PdfPreflightTests(unittest.TestCase):

@@ -54,11 +54,14 @@ def create_app(
     except ModuleNotFoundError as exc:
         raise MissingDependencyError("FastAPI is not installed. Install project dependencies to run the API.") from exc
 
-    settings = ParserSettings(mineru_command=getenv("DOCPARSER_MINERU_COMMAND"))
+    settings = ParserSettings(
+        mineru_command=getenv("DOCPARSER_MINERU_COMMAND") or None,
+        mineru_service_url=getenv("DOCPARSER_MINERU_SERVICE_URL") or None,
+    )
     repository = repository or InMemoryTaskRepository()
     storage = storage or LocalDocumentStorage(settings.storage_root)
     preflight = preflight or PdfPreflightService(settings)
-    parser = parser or MinerUParser(settings.mineru_command)
+    parser = parser or MinerUParser(settings.mineru_command, settings.mineru_service_url)
     extractor = extractor or SchemaExtractor()
 
     app = FastAPI(title="PDF Document Parser", version="0.1.0")
@@ -69,8 +72,22 @@ def create_app(
         return FileResponse(index_path)
 
     @app.get("/health")
-    def health() -> dict[str, str]:
-        return {"status": "ok"}
+    def health() -> dict[str, object]:
+        mineru_configured = bool(settings.mineru_service_url or settings.mineru_command)
+        parser_backend = "pymupdf_fallback"
+        if settings.mineru_service_url:
+            parser_backend = "mineru_service"
+        elif settings.mineru_command:
+            parser_backend = "mineru_command"
+
+        payload: dict[str, object] = {
+            "status": "ok",
+            "parser_backend": parser_backend,
+            "mineru_configured": mineru_configured,
+        }
+        if settings.mineru_service_url:
+            payload["mineru_service_url"] = settings.mineru_service_url
+        return payload
 
     @app.post("/documents")
     async def upload_document(file: UploadFile = File(...)) -> dict[str, str]:
